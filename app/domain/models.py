@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,7 +32,7 @@ class SearchRequest(BaseModel):
     trust_tier_min: int | None = None
     tags: list[str] | None = None
     top_k: int = 10
-    search_mode: str = "hybrid"
+    search_mode: Literal["hybrid", "vector", "fulltext"] = "hybrid"
     rerank: bool = True
 
 
@@ -56,3 +57,15 @@ class UpdateRequest(BaseModel):
     extra_meta: dict | None = None
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+
+
+class WriteRequest(BaseModel):
+    content: str
+    source_path: str
+    trust_tier: int = Field(default=3, ge=1, le=5)
+    tags: list[str] = []
+    extra_meta: dict = {}
+    valid_from: datetime
+    valid_to: datetime | None = None
+    doc_id: str | None = None
+    parent_doc_id: str | None = None
