@@ -1,0 +1,53 @@
+# rag_service/docker-compose.yml
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ragdb
+      POSTGRES_USER: raguser
+      POSTGRES_PASSWORD: ragpass
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raguser -d ragdb"]
+      interval: 5s
+      retries: 10
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports: ["8001:8000"]
+    volumes: ["vllm_models:/root/.cache/huggingface"]
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    command: >
+      --model ${VLLM_MODEL}
+      --dtype auto
+      --max-model-len 8192
+      --gpu-memory-utilization 0.85
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      retries: 20
+      start_period: 60s
+
+  api:
+    build: .
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+    env_file: .env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:
+  vllm_models:
