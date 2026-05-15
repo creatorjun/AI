@@ -1,6 +1,6 @@
 # RAG 서비스 구현 계획서
 
-작성일: 2026-05-12
+작성일: 2026-05-12  
 버전: v1.2.0 (Phase 1~4 완료)
 
 ***
@@ -107,7 +107,9 @@ tests/
 │   ├── test_chunker.py
 │   ├── test_metadata_filter.py
 │   ├── test_bitemporal.py
-│   └── test_models.py
+│   ├── test_models.py
+│   ├── test_hybrid_rrf.py
+│   └── test_folder_watcher.py
 └── integration/
     ├── __init__.py
     ├── test_ingest.py
@@ -217,8 +219,8 @@ Body: {
     "top_k": int (default: 10),
     "search_mode": "hybrid" | "vector" | "fulltext",
     "rerank": bool (default: true),
-    "hybrid_alpha": float (0.0~1.0, default: 0.5),  -- Phase 4 추가
-    "use_parent_context": bool (default: false)      -- Phase 4 추가
+    "hybrid_alpha": float (0.0~1.0, default: 0.5),
+    "use_parent_context": bool (default: false)
 }
 Response: {
     "results": [
@@ -233,7 +235,7 @@ Response: {
             "valid_to": datetime | null,
             "source_path": str,
             "recorded_at": datetime,
-            "parent_content": str | null  -- Phase 4 추가 (use_parent_context=true 시 채워짐)
+            "parent_content": str | null
         }
     ],
     "total": int
@@ -260,35 +262,9 @@ Response: {
 
 ```
 POST   /documents
-Body: {
-    "content": str,
-    "source_path": str,
-    "trust_tier": int,
-    "tags": list[str],
-    "extra_meta": dict,
-    "valid_from": datetime,
-    "valid_to": datetime | null,
-    "doc_id": str | null,
-    "parent_doc_id": str | null
-}
-Response: { "doc_id": str }
-
 PUT    /documents/{doc_id}
-Body: {
-    "content": str,
-    "trust_tier": int | null,
-    "tags": list[str] | null,
-    "extra_meta": dict | null,
-    "valid_from": datetime | null,
-    "valid_to": datetime | null
-}
-Response: { "doc_id": str }
-
 DELETE /documents/{doc_id}
-Response: { "doc_id": str, "affected_chunks": int }
-
 GET    /documents/{doc_id}
-Response: { "doc_id": str, "chunks": list[RAGChunk] }
 ```
 
 ***
@@ -321,8 +297,8 @@ class SearchRequest(BaseModel):
     top_k: int = 10
     search_mode: Literal["hybrid", "vector", "fulltext"] = "hybrid"
     rerank: bool = True
-    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)  # Phase 4
-    use_parent_context: bool = False                            # Phase 4
+    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    use_parent_context: bool = False
 
 class SearchResult(BaseModel):
     doc_id: str
@@ -335,27 +311,7 @@ class SearchResult(BaseModel):
     valid_to: datetime | None
     source_path: str
     recorded_at: datetime
-    parent_content: str | None = None  # Phase 4
-
-class UpdateRequest(BaseModel):
-    doc_id: str
-    content: str
-    trust_tier: int | None = None
-    tags: list[str] | None = None
-    extra_meta: dict | None = None
-    valid_from: datetime | None = None
-    valid_to: datetime | None = None
-
-class WriteRequest(BaseModel):
-    content: str
-    source_path: str
-    trust_tier: int = Field(default=3, ge=1, le=5)
-    tags: list[str] = []
-    extra_meta: dict = {}
-    valid_from: datetime
-    valid_to: datetime | None = None
-    doc_id: str | None = None
-    parent_doc_id: str | None = None
+    parent_content: str | None = None
 ```
 
 ***
@@ -385,68 +341,12 @@ class IVectorStore(ABC):
     ) -> list[SearchResult]: ...
     async def get_by_doc_id(self, doc_id: str) -> list[RAGChunk]: ...
     async def get_source_paths(self) -> list[str]: ...
-    async def get_parent_chunks(self, parent_doc_ids: list[str]) -> dict[str, str]: ...  # Phase 4
+    async def get_parent_chunks(self, parent_doc_ids: list[str]) -> dict[str, str]: ...
 ```
 
 ***
 
 ## 8. 인프라 설정
-
-### docker-compose.yml
-
-```yaml
-services:
-  db:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_DB: ragdb
-      POSTGRES_USER: raguser
-      POSTGRES_PASSWORD: ragpass
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U raguser -d ragdb"]
-      interval: 5s
-      retries: 10
-
-  vllm:
-    profiles: ["gpu"]           # GPU 환경에서만 기동
-    image: vllm/vllm-openai:latest
-    ports: ["8001:8000"]
-    volumes: ["vllm_models:/root/.cache/huggingface"]
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    command: >
-      --model ${VLLM_MODEL}
-      --dtype auto
-      --max-model-len 8192
-      --gpu-memory-utilization 0.85
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
-      interval: 10s
-      retries: 20
-      start_period: 60s
-
-  api:
-    build: .
-    ports: ["8000:8000"]
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file: .env
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-volumes:
-  pgdata:
-  vllm_models:
-```
 
 ### 환경변수 목록
 
@@ -467,8 +367,6 @@ volumes:
 | SEMANTIC_CHUNKER_THRESHOLD | SemanticChunker 경계 임계값 | 0.85 |
 
 ### GPU 없는 개발 모드
-
-`.env`에 `RERANKER_ENABLED=false` 설정 후:
 
 ```cmd
 docker compose up db api --build
@@ -497,8 +395,6 @@ docker compose --profile gpu up --build
 | Alembic 마이그레이션 | alembic/versions/0001_init_rag.py | ✅ |
 | FastAPI 진입점 | app/main.py | ✅ |
 
-**비고**: vllm 서비스를 `profiles: ["gpu"]`로 분리하여 GPU 없는 환경에서도 `docker compose up db api`로 기동 가능하도록 수정함.
-
 ***
 
 ### ✅ Phase 2 — 도메인 + 인프라 레이어 `[완료]`
@@ -514,11 +410,6 @@ docker compose --profile gpu up --build
 | Chunker 구현 | app/infrastructure/chunker.py | ✅ |
 | PgVectorStore 구현 | app/infrastructure/pg_vector_store.py | ✅ |
 | 단위 테스트 작성 | tests/unit/ | ✅ |
-
-**비고**:
-- `SearchRequest.search_mode`를 `str` → `Literal["hybrid", "vector", "fulltext"]`로 강화하여 잘못된 값 입력 시 ValidationError 발생
-- `UpdateRequest`(수정, doc_id 필수)와 `WriteRequest`(생성, doc_id 옵션) 모델 분리
-- `NoOpReranker` 추가로 `RERANKER_ENABLED=false` 시 vLLM 없이도 동작
 
 **테스트 결과**: `pytest tests/unit/ -v` → **30 passed**
 
@@ -548,18 +439,6 @@ docker compose --profile gpu up --build
 
 **테스트 결과**: `pytest tests/ -v` → **38 passed**
 
-#### 통합 테스트 시나리오 (test_manage_cycle.py)
-
-```
-1. POST /documents          → doc_id 획득          ✅
-2. POST /search             → 삽입 문서 검색 확인   ✅
-3. PUT  /documents/{doc_id} → 바이템포럴 버전 기록  ✅
-4. POST /search as_of=과거  → 이전 버전 조회 확인   ✅
-5. POST /search as_of=현재  → 새 버전 조회 확인     ✅
-6. DELETE /documents/{id}   → soft delete           ✅
-7. POST /search             → 결과 없음 확인        ✅
-```
-
 ***
 
 ### ✅ Phase 4 — 고도화 `[완료]`
@@ -577,12 +456,9 @@ docker compose --profile gpu up --build
 | SearchRequest/Result 필드 확장 | app/domain/models.py | ✅ |
 | SearchAPIRequest/Item 필드 확장 | app/api/schemas/search_schema.py | ✅ |
 | 환경변수 3종 추가 | app/config.py | ✅ |
+| Phase 4 테스트 추가 | tests/ | ✅ |
 
-**비고**:
-- `SemanticChunker`: 인접 문장 임베딩 코사인 유사도가 `SEMANTIC_CHUNKER_THRESHOLD`(기본 0.85) 미만으로 하락하는 지점을 청크 경계로 결정. `deps.py`에서 기본 청커로 교체.
-- `hybrid_alpha`: 요청마다 동적 조정 가능. `1.0` → vector 전용, `0.0` → fulltext 전용.
-- `FolderWatcher`: `WATCH_FOLDER` 설정 시 서버 기동과 함께 watchdog Observer 시작. 생성/수정 이벤트 → `ingest_file()`, 삭제 이벤트 → soft-delete.
-- `Parent-Child` 검색: `use_parent_context=true` 요청 시 검색된 자식 청크의 `doc_id`로 부모 전체 텍스트를 조합하여 `SearchResult.parent_content`에 주입.
+**테스트 결과**: `pytest tests/ -v` → **76 passed, 0 warnings**
 
 #### Chunker 구현 목록 (업데이트)
 
@@ -644,9 +520,9 @@ await manage_usecase.rag_write(request)
 
 ```
 메인 에이전트
-  └─→ rag_search() 호출
-  └─→ 결과 품질 self-critique
-  └─→ 품질 미달 시 rag_write() / rag_update() 직접 호출
-  └─→ 저지 에이전트에 수정 결과 검증 요청
-  └─→ 저지 승인 시 확정 / 거부 시 재시도
+  └→ rag_search() 호출
+  └→ 결과 품질 self-critique
+  └→ 품질 미달 시 rag_write() / rag_update() 직접 호출
+  └→ 저지 에이전트에 수정 결과 검증 요청
+  └→ 저지 승인 시 확정 / 거부 시 재시도
 ```

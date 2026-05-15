@@ -1,76 +1,75 @@
 # CHANGELOG
 
-All notable changes to this project will be documented in this file.
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+모든 주요 변경 사항을 기록합니다.  
+형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)  
+버전 관리: [Semantic Versioning](https://semver.org/lang/ko/)
 
----
+***
 
-## [Unreleased] — 2026-05-15
-
-### Performance
-
-#### 🔴 Critical
-
-- **`app/api/deps.py`** — `OpenAIEmbedder`, `VLLMReranker`, `SentenceChunker`를 매 요청마다 재생성하던 문제 수정
-  - 기존: `get_embedder()`, `get_reranker()`가 `Depends` 체인 내에서 매 요청마다 호출되어 `AsyncOpenAI` 클라이언트(내부 `httpx.AsyncClient` + TCP 커넥션 풀 포함)가 매번 새로 생성됨
-  - 변경: 모듈 레벨 싱글톤 `_embedder`, `_reranker`, `_chunker`로 교체하여 커넥션 풀 재사용 및 인스턴스 생성 오버헤드 제거
-
-- **`app/infrastructure/pg_vector_store.py` — `_vector_search` embedding 문자열 직렬화 제거**
-  - 기존: `"[" + ",".join(str(v) for v in embedding) + "]"` 로 3072차원 벡터를 매 쿼리마다 약 30,000자 문자열로 직렬화한 뒤 raw `text()` SQL에 삽입
-  - 변경: `pgvector.sqlalchemy` 컬럼의 `.cosine_distance(embedding)` ORM 메서드를 사용, SQLAlchemy 바인드 파라미터로 직접 전달하여 문자열 직렬화 오버헤드 및 SQL Injection 위험 제거
-
-#### 🟡 Major
-
-- **`app/infrastructure/pg_vector_store.py` — `write_batch` N-루프 flush 제거**
-  - 기존: `write_batch()`가 내부적으로 `write()`를 N번 순차 호출하며 각 호출마다 `session.flush()` 대기, 청크 수만큼 DB 왕복 발생
-  - 변경: `_build_orm()` 헬퍼 메서드 도입 후 `session.add_all(orm_list)` + 단일 `flush()`로 교체, DB 왕복을 1회로 축소
-
-- **`app/database.py` — 커넥션 풀 파라미터 명시**
-  - 기존: SQLAlchemy 기본값(`pool_size=5`)으로 동작하여 동시 요청 급증 시 커넥션 고갈 위험 존재
-  - 변경: `pool_size=10`, `max_overflow=20`, `pool_timeout=30`, `pool_recycle=1800` 명시적 설정
-
-- **`app/infrastructure/vllm_reranker.py` — `asyncio` 모듈 레벨 import 이동**
-  - 기존: `rerank()` 메서드 내부에서 `import asyncio`를 매 호출마다 실행
-  - 변경: 파일 최상단 모듈 레벨 import로 이동
-
-- **`app/infrastructure/openai_embedder.py` — `AsyncOpenAI` 클라이언트 싱글톤화**
-  - 기존: `OpenAIEmbedder.__init__()` 내에서 매번 `AsyncOpenAI()` 인스턴스 생성
-  - 변경: 모듈 레벨 `_client` 싱글톤으로 추출, 인스턴스는 참조만 보유
-
-- **`app/infrastructure/vllm_reranker.py` — `AsyncOpenAI` 클라이언트 싱글톤화**
-  - 기존: `VLLMReranker.__init__()` 내에서 매번 `AsyncOpenAI()` 인스턴스 생성
-  - 변경: 모듈 레벨 `_client` 싱글톤으로 추출
-
-#### 🟢 Minor
-
-- **`app/main.py` — `/health` 엔드포인트 세션 획득 방식 표준화**
-  - 기존: `AsyncSessionLocal()`을 직접 생성하여 `get_db` 의존성 우회, commit/rollback 없이 커넥션 반납
-  - 변경: `Depends(get_db)`를 통해 표준 세션 라이프사이클 적용
-
-- **`app/infrastructure/pg_vector_store.py` — `_build_orm()` 헬퍼 메서드 도입**
-  - `write()`와 `write_batch()` 양쪽에서 중복되던 ORM 객체 생성 로직을 단일 메서드로 추출
-
----
-
-## [0.1.0] — 2026-05-12
+## [v1.2.0] - 2026-05-15
 
 ### Added
+- `SemanticChunker`: 인접 문장 임베딩 코사인 유사도 기반 경계 탐지 청커 추가 (`app/infrastructure/chunker.py`)
+- `FolderWatcher`: watchdog 기반 폴더 감시 → 파일 생성/수정 시 자동 ingest, 삭제 시 soft-delete (`app/infrastructure/folder_watcher.py`)
+- `hybrid_alpha` 파라미터: 요청마다 RRF vector/fulltext 가중치 동적 조정 (`SearchRequest`, `pg_vector_store.py`)
+- `use_parent_context` 파라미터: 검색된 자식 청크의 부모 전체 텍스트를 `parent_content`에 주입 (`search_usecase.py`)
+- `IVectorStore.get_parent_chunks()`: 부모 doc_id 목록으로 전체 텍스트 일괄 조회 인터페이스 추가 (`ports.py`)
+- `SearchResult.parent_content` 필드 추가 (`domain/models.py`)
+- `app/main.py` lifespan에 `FolderWatcher` 통합 (`WATCH_FOLDER` 설정 시 서버 기동과 함께 자동 시작)
+- 환경변수 3종 추가: `HYBRID_ALPHA`, `WATCH_FOLDER`, `SEMANTIC_CHUNKER_THRESHOLD`
+- Phase 4 테스트 추가 (`tests/unit/test_hybrid_rrf.py`, `tests/unit/test_folder_watcher.py`)
+- 기존 테스트 확장: `TestSemanticChunker` (7 cases), Phase 4 모델 필드, `use_parent_context` 통합 시나리오 (5 cases)
 
-- **RAG Service 초기 구현** (`first commit` / `alembic`)
-  - Clean Architecture 기반 레이어 구조 수립: `api` → `application` → `domain` → `infrastructure`
-  - **Domain 레이어**: `RAGChunk`, `RAGDocumentMeta`, `SearchRequest`, `SearchResult`, `UpdateRequest` 도메인 모델 정의
-  - **Domain Ports**: `IEmbedder`, `IChunker`, `IVectorStore`, `IReranker` 추상 인터페이스 정의
-  - **Infrastructure 레이어**:
-    - `OpenAIEmbedder`: `text-embedding-3-large` (3072차원) 기반 단건/배치 임베딩
-    - `PgVectorStore`: pgvector 기반 vector / fulltext / hybrid(RRF) 검색, soft-delete, temporal validity 지원
-    - `SentenceChunker` / `FixedChunker` / `HierarchicalChunker`: 문장 단위 / 고정 토큰 / 계층적 청킹
-    - `VLLMReranker`: vLLM Chat Completions API 기반 LLM 리랭커 (JSON score 출력)
-    - `NoOpReranker`: 리랭커 비활성화 시 pass-through 구현
-  - **ORM**: `RAGDocumentORM` — pgvector `Vector(3072)`, `TSVECTOR`, `JSONB`, `ARRAY(Text)`, temporal 컬럼 포함
-  - **API 라우터**:
-    - `POST /ingest` — 단건/배치 문서 수집 및 청킹·임베딩
-    - `POST /search` — vector / fulltext / hybrid 검색 + 리랭킹
-    - `GET|PUT|DELETE /manage/{doc_id}` — 문서 조회·수정·삭제 관리
-  - **Alembic**: DB 마이그레이션 초기 설정
-  - **Docker**: `Dockerfile` + `docker-compose.yml` (PostgreSQL + pgvector, vLLM 서비스 포함)
-  - **Config**: `pydantic-settings` 기반 환경변수 관리 (`Settings`)
+### Changed
+- `deps.py`: 기본 청커를 `SemanticChunker`로 교체
+- `SearchAPIRequest` / `SearchResultItem` 스키마에 `hybrid_alpha`, `use_parent_context`, `parent_content` 필드 추가
+- README.md 버전 v1.1.0 → v1.2.0, Phase 4 완료 반영
+
+### Fixed
+- `tests/unit/test_folder_watcher.py`: `AsyncMock` → `MagicMock` 교체로 `RuntimeWarning: coroutine never awaited` 제거
+- `tests/unit/test_folder_watcher.py`: `_make_doc_id` 패치 및 `vector_store` 독립 분리로 마지막 warning 제거
+- `tests/unit/test_folder_watcher.py`: 미사용 `_SUPPORTED_EXTENSIONS` import 제거
+
+**테스트 결과**: `pytest tests/ -v` → **76 passed, 0 warnings**
+
+***
+
+## [v1.1.0] - 2026-05-12
+
+### Added
+- Phase 3: Application + API 레이어 전체 구현
+  - `IngestUsecase`, `ManageUsecase`, `SearchUsecase`
+  - FastAPI 라우터 3종 (`ingest`, `search`, `manage`)
+  - Pydantic 스키마 3종
+  - DI 설정 (`deps.py`)
+- 통합 테스트 추가 (`tests/integration/`)
+- `NoOpReranker`: `RERANKER_ENABLED=false` 시 vLLM 없이 동작 보장
+
+### Changed
+- `SearchRequest.search_mode`: `str` → `Literal["hybrid", "vector", "fulltext"]` 강화
+- `UpdateRequest`(수정, doc_id 필수) / `WriteRequest`(생성, doc_id 옵션) 모델 분리
+
+**테스트 결과**: `pytest tests/ -v` → **38 passed**
+
+***
+
+## [v1.0.0] - 2026-05-12
+
+### Added
+- Phase 1: 기반 인프라 구성
+  - Docker Compose (db + api, vLLM은 `profiles: ["gpu"]`로 분리)
+  - Alembic 마이그레이션 (`0001_init_rag.py`)
+  - AsyncEngine + SessionLocal (`database.py`)
+  - ORM 테이블 정의 (`orm_models.py`)
+  - Pydantic Settings 기반 환경변수 관리 (`config.py`)
+  - FastAPI lifespan 진입점 (`main.py`)
+- Phase 2: 도메인 + 인프라 레이어 구현
+  - 도메인 모델: `RAGDocumentMeta`, `RAGChunk`, `SearchRequest`, `SearchResult`
+  - 포트 인터페이스: `IEmbedder`, `IChunker`, `IReranker`, `IVectorStore`
+  - `OpenAIEmbedder`, `VLLMReranker`, `PgVectorStore`
+  - Chunker 3종: `FixedChunker`, `SentenceChunker`, `HierarchicalChunker`
+  - 바이템포럴 설계: `valid_from` / `valid_to` / `recorded_at`
+  - 신뢰 티어 (Tier 1~5) 설계
+  - 단위 테스트 (`tests/unit/`)
+
+**테스트 결과**: `pytest tests/unit/ -v` → **30 passed**
