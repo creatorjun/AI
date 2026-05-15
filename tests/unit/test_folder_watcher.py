@@ -1,6 +1,6 @@
 # tests/unit/test_folder_watcher.py
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -43,7 +43,7 @@ class TestRAGEventHandler:
     def _make_handler(self):
         loop = asyncio.new_event_loop()
         usecase = MagicMock()
-        usecase.ingest_file = AsyncMock(return_value="doc-id")
+        usecase.ingest_file = MagicMock(return_value="doc-id")
         usecase._vector_store = MagicMock()
         usecase._vector_store.delete = MagicMock(return_value=1)
         handler = _RAGEventHandler(loop=loop, usecase=usecase)
