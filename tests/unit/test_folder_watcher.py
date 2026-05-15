@@ -45,7 +45,7 @@ class TestRAGEventHandler:
         usecase = MagicMock()
         usecase.ingest_file = AsyncMock(return_value="doc-id")
         usecase._vector_store = MagicMock()
-        usecase._vector_store.delete = AsyncMock(return_value=1)
+        usecase._vector_store.delete = MagicMock(return_value=1)
         handler = _RAGEventHandler(loop=loop, usecase=usecase)
         return handler, usecase, loop
 
