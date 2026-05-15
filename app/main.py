@@ -22,16 +22,20 @@ logger = logging.getLogger(__name__)
 _folder_watcher: FolderWatcher | None = None
 
 
+def _make_ingest_usecase() -> IngestUsecase:
+    session = AsyncSessionLocal()
+    return IngestUsecase(
+        embedder=_embedder,
+        chunker=_chunker,
+        vector_store=PgVectorStore(session),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _folder_watcher
     if settings.watch_folder:
-        async with AsyncSessionLocal() as session:
-            usecase = IngestUsecase(
-                embedder=_embedder,
-                chunker=_chunker,
-                vector_store=PgVectorStore(session),
-            )
+        usecase = _make_ingest_usecase()
         _folder_watcher = FolderWatcher(
             folder_path=settings.watch_folder,
             usecase=usecase,

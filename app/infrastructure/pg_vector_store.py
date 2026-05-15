@@ -114,7 +114,9 @@ class PgVectorStore(IVectorStore):
             content=request.content,
             embedding=embedding,
         )
-        await self.write(new_chunk)
+        orm = self._build_orm(new_chunk)
+        self._session.add(orm)
+        await self._session.flush()
         await self._session.commit()
         return request.doc_id
 

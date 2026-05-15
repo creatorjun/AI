@@ -106,29 +106,31 @@ class IngestUsecase:
         to_delete = stored_paths - disk_paths
         to_update = disk_paths & stored_paths
 
-        added = 0
-        for path in to_add:
-            await self.ingest_file(path)
-            added += 1
-
-        deleted = 0
-        for path in to_delete:
+        async def _maybe_update(path: str) -> bool:
             doc_id = _make_doc_id(path)
-            await self._vector_store.delete(doc_id)
-            deleted += 1
-
-        updated = 0
-        for path in to_update:
-            doc_id = _make_doc_id(path)
-            stored_mtime = None
             chunks = await self._vector_store.get_by_doc_id(doc_id)
-            if chunks:
-                stored_mtime = chunks[0].meta.recorded_at
-            disk_mtime = datetime.fromtimestamp(
-                os.path.getmtime(path), tz=timezone.utc
-            )
+            stored_mtime = chunks[0].meta.recorded_at if chunks else None
+            disk_mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
             if stored_mtime is None or disk_mtime > stored_mtime:
                 await self.ingest_file(path)
-                updated += 1
+                return True
+            return False
 
-        return {"added": added, "updated": updated, "deleted": deleted} 
+        add_results = await asyncio.gather(
+            *[self.ingest_file(p) for p in to_add],
+            return_exceptions=True,
+        )
+        delete_results = await asyncio.gather(
+            *[self._vector_store.delete(_make_doc_id(p)) for p in to_delete],
+            return_exceptions=True,
+        )
+        update_flags = await asyncio.gather(
+            *[_maybe_update(p) for p in to_update],
+            return_exceptions=True,
+        )
+
+        added = sum(1 for r in add_results if not isinstance(r, BaseException))
+        deleted = sum(1 for r in delete_results if not isinstance(r, BaseException))
+        updated = sum(1 for r in update_flags if r is True)
+
+        return {"added": added, "updated": updated, "deleted": deleted}

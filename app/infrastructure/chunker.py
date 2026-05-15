@@ -1,7 +1,7 @@
 # app/infrastructure/chunker.py
 from __future__ import annotations
 
-import asyncio
+import math
 import re
 
 from app.domain.ports import IChunker, IEmbedder
@@ -79,15 +79,15 @@ class SemanticChunker(IChunker):
     @staticmethod
     def _cosine(a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
-        norm_a = sum(x * x for x in a) ** 0.5
-        norm_b = sum(x * x for x in b) ** 0.5
-        if norm_a == 0 or norm_b == 0:
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0.0 or norm_b == 0.0:
             return 0.0
         return dot / (norm_a * norm_b)
 
     def chunk(self, content: str, source_path: str) -> list[str]:
-        return asyncio.get_event_loop().run_until_complete(
-            self.async_chunk(content, source_path)
+        raise RuntimeError(
+            "SemanticChunker는 async 컨텍스트에서 async_chunk()를 직접 호출해야 합니다."
         )
 
     async def async_chunk(self, content: str, source_path: str) -> list[str]:
