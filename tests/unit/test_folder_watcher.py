@@ -44,8 +44,11 @@ class TestRAGEventHandler:
         loop = asyncio.new_event_loop()
         usecase = MagicMock()
         usecase.ingest_file = MagicMock(return_value="doc-id")
-        usecase._vector_store = MagicMock()
-        usecase._vector_store.delete = MagicMock(return_value=1)
+
+        vector_store = MagicMock()
+        vector_store.delete = MagicMock(return_value=1)
+        usecase._vector_store = vector_store
+
         handler = _RAGEventHandler(loop=loop, usecase=usecase)
         return handler, usecase, loop
 
@@ -74,7 +77,8 @@ class TestRAGEventHandler:
         event = MagicMock()
         event.is_directory = False
         event.src_path = str(tmp_path / "doc.txt")
-        with patch("asyncio.run_coroutine_threadsafe") as mock_submit:
+        with patch("app.infrastructure.folder_watcher._make_doc_id", return_value="doc-id"), \
+             patch("asyncio.run_coroutine_threadsafe") as mock_submit:
             handler.on_deleted(event)
             mock_submit.assert_called_once()
         loop.close()
