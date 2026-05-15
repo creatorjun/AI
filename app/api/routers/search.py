@@ -21,6 +21,8 @@ async def search(
         top_k=body.top_k,
         search_mode=body.search_mode,
         rerank=body.rerank,
+        hybrid_alpha=body.hybrid_alpha,
+        use_parent_context=body.use_parent_context,
     )
     results = await usecase.rag_search(request)
     items = [SearchResultItem(**r.model_dump()) for r in results]

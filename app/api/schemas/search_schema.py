@@ -13,6 +13,8 @@ class SearchAPIRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=100)
     search_mode: Literal["hybrid", "vector", "fulltext"] = "hybrid"
     rerank: bool = True
+    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    use_parent_context: bool = False
 
 
 class SearchResultItem(BaseModel):
@@ -26,6 +28,7 @@ class SearchResultItem(BaseModel):
     valid_to: datetime | None
     source_path: str
     recorded_at: datetime
+    parent_content: str | None = None
 
 
 class SearchAPIResponse(BaseModel):

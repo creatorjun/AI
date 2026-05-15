@@ -34,6 +34,8 @@ class SearchRequest(BaseModel):
     top_k: int = 10
     search_mode: Literal["hybrid", "vector", "fulltext"] = "hybrid"
     rerank: bool = True
+    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    use_parent_context: bool = False
 
 
 class SearchResult(BaseModel):
@@ -47,6 +49,7 @@ class SearchResult(BaseModel):
     valid_to: datetime | None
     source_path: str
     recorded_at: datetime
+    parent_content: str | None = None
 
 
 class UpdateRequest(BaseModel):

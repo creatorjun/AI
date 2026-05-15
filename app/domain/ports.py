@@ -47,3 +47,6 @@ class IVectorStore(ABC):
 
     @abstractmethod
     async def get_source_paths(self) -> list[str]: ...
+
+    @abstractmethod
+    async def get_parent_chunks(self, parent_doc_ids: list[str]) -> dict[str, str]: ...

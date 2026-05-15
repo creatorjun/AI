@@ -10,14 +10,14 @@ from app.application.search_usecase import SearchUsecase
 from app.config import settings
 from app.database import get_db
 from app.domain.ports import IReranker
-from app.infrastructure.chunker import SentenceChunker
+from app.infrastructure.chunker import SemanticChunker, SentenceChunker
 from app.infrastructure.openai_embedder import OpenAIEmbedder
 from app.infrastructure.pg_vector_store import PgVectorStore
 from app.infrastructure.vllm_reranker import NoOpReranker, VLLMReranker
 
 _embedder = OpenAIEmbedder()
 _reranker: IReranker = VLLMReranker() if settings.reranker_enabled else NoOpReranker()
-_chunker = SentenceChunker()
+_chunker = SemanticChunker(embedder=_embedder, threshold=settings.semantic_chunker_threshold)
 
 
 async def get_ingest_usecase(

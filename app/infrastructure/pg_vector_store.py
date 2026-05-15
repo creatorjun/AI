@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -156,7 +155,10 @@ class PgVectorStore(IVectorStore):
         elif request.search_mode == "fulltext":
             return await self._fulltext_search(request.query, base_conditions, request.top_k)
         else:
-            return await self._hybrid_search(query_embedding, request.query, base_conditions, request.top_k, limit)
+            return await self._hybrid_search(
+                query_embedding, request.query, base_conditions,
+                request.top_k, limit, request.hybrid_alpha,
+            )
 
     async def _vector_search(
         self, embedding: list[float], conditions: list, top_k: int
@@ -197,6 +199,7 @@ class PgVectorStore(IVectorStore):
         conditions: list,
         top_k: int,
         limit: int,
+        alpha: float = 0.5,
     ) -> list[SearchResult]:
         vector_results = await self._vector_search(embedding, conditions, limit)
         fulltext_results = await self._fulltext_search(query, conditions, limit)
@@ -207,12 +210,12 @@ class PgVectorStore(IVectorStore):
 
         for rank, result in enumerate(vector_results):
             key = (result.doc_id, result.chunk_index)
-            scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+            scores[key] = scores.get(key, 0.0) + alpha / (rrf_k + rank + 1)
             doc_map[key] = result
 
         for rank, result in enumerate(fulltext_results):
             key = (result.doc_id, result.chunk_index)
-            scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+            scores[key] = scores.get(key, 0.0) + (1.0 - alpha) / (rrf_k + rank + 1)
             doc_map[key] = result
 
         sorted_keys = sorted(scores, key=lambda k: scores[k], reverse=True)
@@ -237,3 +240,20 @@ class PgVectorStore(IVectorStore):
         ).distinct()
         result = await self._session.execute(stmt)
         return [row for row in result.scalars().all()]
+
+    async def get_parent_chunks(self, parent_doc_ids: list[str]) -> dict[str, str]:
+        if not parent_doc_ids:
+            return {}
+        stmt = select(RAGDocumentORM).where(
+            and_(
+                RAGDocumentORM.doc_id.in_(parent_doc_ids),
+                RAGDocumentORM.deleted_at.is_(None),
+            )
+        ).order_by(RAGDocumentORM.doc_id, RAGDocumentORM.chunk_index)
+        result = await self._session.execute(stmt)
+        rows = result.scalars().all()
+
+        parent_map: dict[str, list[str]] = {}
+        for row in rows:
+            parent_map.setdefault(row.doc_id, []).append(row.content)
+        return {doc_id: " ".join(parts) for doc_id, parts in parent_map.items()}

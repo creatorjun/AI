@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     hf_token: str = ""
     app_env: str = "development"
     reranker_enabled: bool = True
+    hybrid_alpha: float = 0.5
+    watch_folder: str = ""
+    semantic_chunker_threshold: float = 0.85
 
 
 settings = Settings()
