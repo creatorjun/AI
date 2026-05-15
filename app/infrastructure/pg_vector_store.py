@@ -1,9 +1,9 @@
 # app/infrastructure/pg_vector_store.py
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,8 +49,8 @@ class PgVectorStore(IVectorStore):
             recorded_at=row.recorded_at,
         )
 
-    async def write(self, chunk: RAGChunk) -> str:
-        orm = RAGDocumentORM(
+    def _build_orm(self, chunk: RAGChunk) -> RAGDocumentORM:
+        return RAGDocumentORM(
             doc_id=chunk.meta.doc_id,
             chunk_index=chunk.meta.chunk_index,
             parent_doc_id=chunk.meta.parent_doc_id,
@@ -63,17 +63,19 @@ class PgVectorStore(IVectorStore):
             valid_from=chunk.meta.valid_from,
             valid_to=chunk.meta.valid_to,
         )
+
+    async def write(self, chunk: RAGChunk) -> str:
+        orm = self._build_orm(chunk)
         self._session.add(orm)
         await self._session.flush()
         return chunk.meta.doc_id
 
     async def write_batch(self, chunks: list[RAGChunk]) -> list[str]:
-        doc_ids: list[str] = []
-        for chunk in chunks:
-            doc_id = await self.write(chunk)
-            doc_ids.append(doc_id)
+        orm_list = [self._build_orm(chunk) for chunk in chunks]
+        self._session.add_all(orm_list)
+        await self._session.flush()
         await self._session.commit()
-        return doc_ids
+        return [chunk.meta.doc_id for chunk in chunks]
 
     async def update(self, request: UpdateRequest, embedding: list[float]) -> str:
         now = datetime.now(tz=timezone.utc)
@@ -159,8 +161,7 @@ class PgVectorStore(IVectorStore):
     async def _vector_search(
         self, embedding: list[float], conditions: list, top_k: int
     ) -> list[SearchResult]:
-        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
-        distance_expr = text(f"embedding <=> '{embedding_str}'::vector").label("distance")
+        distance_expr = RAGDocumentORM.embedding.cosine_distance(embedding).label("distance")
 
         stmt = (
             select(RAGDocumentORM, distance_expr)

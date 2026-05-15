@@ -1,4 +1,5 @@
 # app/infrastructure/vllm_reranker.py
+import asyncio
 import json
 
 from openai import AsyncOpenAI
@@ -14,13 +15,15 @@ _RERANK_SYSTEM_PROMPT = (
     "Output only the JSON object, no explanation."
 )
 
+_client = AsyncOpenAI(
+    base_url=settings.vllm_base_url,
+    api_key=settings.vllm_api_key,
+)
+
 
 class VLLMReranker(IReranker):
     def __init__(self) -> None:
-        self._client = AsyncOpenAI(
-            base_url=settings.vllm_base_url,
-            api_key=settings.vllm_api_key,
-        )
+        self._client = _client
         self._model = settings.vllm_model
 
     async def _score_single(self, query: str, content: str) -> float:
@@ -45,8 +48,6 @@ class VLLMReranker(IReranker):
     async def rerank(
         self, query: str, results: list[SearchResult], top_k: int
     ) -> list[SearchResult]:
-        import asyncio
-
         scores = await asyncio.gather(
             *[self._score_single(query, r.content) for r in results]
         )

@@ -4,10 +4,12 @@ from openai import AsyncOpenAI
 from app.config import settings
 from app.domain.ports import IEmbedder
 
+_client = AsyncOpenAI(api_key=settings.openai_api_key)
+
 
 class OpenAIEmbedder(IEmbedder):
     def __init__(self) -> None:
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self._client = _client
         self._model = settings.embedding_model
         self._dimensions = settings.embedding_dimensions
 
