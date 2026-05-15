@@ -1,12 +1,10 @@
 # tests/unit/test_folder_watcher.py
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.infrastructure.folder_watcher import FolderWatcher, _RAGEventHandler
-from app.infrastructure.chunker import _SUPPORTED_EXTENSIONS
 
 
 class TestFolderWatcher:
