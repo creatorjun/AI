@@ -6,6 +6,34 @@
 
 ***
 
+## [v1.3.0] - 2026-05-15
+
+### Added
+- `evaluation/` 패키지 신규 생성 (Phase 5 품질 검증 파이프라인)
+  - `dataset.py`: `EvalSample` 모델 + 5개 기본 골든 데이터셋 + JSON 파일 로더
+  - `ragas_evaluator.py`: `RagasEvaluator` — Faithfulness / ContextRecall / AnswerRelevancy 3종 메트릭 계산 (`EvalReport`, `SampleScore`)
+  - `experiment_matrix.py`: `ExperimentConfig` / `ExperimentResult` / `ExperimentRunner` — 검색모드 × hybrid_alpha × rerank × parent-child 조합 자동 실험기
+  - `report.py`: 실험 결과 CSV / JSON 저장 + 콘솔 정렬 리포트 출력
+  - `run_phase5.py`: 단독 실행 엔트리포인트 (`python evaluation/run_phase5.py [dataset.json]`)
+- `tests/unit/test_evaluation.py`: 평가 파이프라인 단위 테스트 18 cases
+  - `TestHelperFunctions` (6): cosine / token_overlap 수치 검증
+  - `TestEvalSampleAndDataset` (3): 데이터셋 로딩 / JSON 파일 로드
+  - `TestEvalReport` (2): 빈 리포트 / avg 계산
+  - `TestRagasEvaluator` (2): 빈 검색 결과 / perfect recall 시나리오
+  - `TestBuildConfigs` (3): alpha 필터링 / hybrid 전용 alpha / label 자동 생성
+  - `TestReport` (3): row 키 검증 / CSV 저장 / JSON 저장
+- `pyproject.toml`: `watchdog>=4.0.0` 의존성 추가, 버전 1.3.0 갱신
+
+### Notes
+- `RagasEvaluator`는 외부 RAGAS 라이브러리 없이 자체 구현 (cosine 유사도 + token overlap 기반)
+- 실제 DB 연결 없이 `IEmbedder` / `IVectorStore` mock으로 단위 테스트 독립 실행 가능
+- `run_phase5.py`는 실제 PostgreSQL + OpenAI API 연결이 필요한 통합 실행 스크립트
+
+**테스트 결과**: `pytest tests/unit/test_evaluation.py -v` → **18 passed**  
+**누적 테스트**: `pytest tests/ -v` → **94 passed, 0 warnings** (예상)
+
+***
+
 ## [v1.2.0] - 2026-05-15
 
 ### Added

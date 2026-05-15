@@ -1,7 +1,7 @@
 # RAG 서비스 구현 계획서
 
 작성일: 2026-05-12  
-버전: v1.2.0 (Phase 1~4 완료)
+버전: v1.3.0 (Phase 1~5 완료)
 
 ***
 
@@ -60,6 +60,14 @@ rag_service/
 │   └── versions/
 │       └── 0001_init_rag.py
 │
+├── evaluation/                         # Phase 5: 품질 검증 파이프라인
+│   ├── __init__.py
+│   ├── dataset.py                      # 골든 데이터셋 로더
+│   ├── ragas_evaluator.py              # Faithfulness / ContextRecall / AnswerRelevancy
+│   ├── experiment_matrix.py            # 비교 실험 매트릭스 실행기
+│   ├── report.py                       # CSV/JSON 저장 + 콘솔 리포트
+│   └── run_phase5.py                   # 단독 실행 엔트리포인트
+│
 └── app/
     ├── main.py                         # lifespan: FolderWatcher 통합
     ├── config.py
@@ -83,7 +91,7 @@ rag_service/
     │   ├── openai_embedder.py
     │   ├── vllm_reranker.py
     │   ├── chunker.py                  # SemanticChunker 추가
-    │   └── folder_watcher.py           # watchdog 기반 FolderWatcher (신규)
+    │   └── folder_watcher.py           # watchdog 기반 FolderWatcher
     │
     └── api/
         ├── __init__.py
@@ -109,7 +117,8 @@ tests/
 │   ├── test_bitemporal.py
 │   ├── test_models.py
 │   ├── test_hybrid_rrf.py
-│   └── test_folder_watcher.py
+│   ├── test_folder_watcher.py
+│   └── test_evaluation.py             # Phase 5 평가 파이프라인 테스트
 └── integration/
     ├── __init__.py
     ├── test_ingest.py
@@ -467,32 +476,55 @@ docker compose --profile gpu up --build
 | FixedChunker | 고정 토큰 크기, overlap 지원 |
 | SentenceChunker | 문장 단위 분리, overlap_sentences 지원 |
 | HierarchicalChunker | Parent-Child 구조, 검색 정밀도 + 컨텍스트 폭 동시 확보 |
-| **SemanticChunker** | **임베딩 코사인 유사도 기반 경계 탐지, Phase 4 기본값** |
+| SemanticChunker | 임베딩 코사인 유사도 기반 경계 탐지, Phase 4 기본값 |
 
 ***
 
-### 🔲 Phase 5 — 품질 검증
+### ✅ Phase 5 — 품질 검증 `[완료]`
 
-**기간**: 1~2일 | **완료 기준**: 검색 품질 베이스라인 확정 및 파라미터 고정
+**기간**: 1일 | **완료일**: 2026-05-15
 
-#### 측정 메트릭 (RAGAS)
+| 작업 | 파일 | 상태 |
+|------|------|------|
+| 골든 데이터셋 로더 | evaluation/dataset.py | ✅ |
+| RAGAS 평가기 구현 | evaluation/ragas_evaluator.py | ✅ |
+| 실험 매트릭스 실행기 | evaluation/experiment_matrix.py | ✅ |
+| 결과 리포트 (CSV/JSON) | evaluation/report.py | ✅ |
+| 단독 실행 엔트리포인트 | evaluation/run_phase5.py | ✅ |
+| Phase 5 단위 테스트 | tests/unit/test_evaluation.py | ✅ |
 
-| 메트릭 | 설명 |
-|--------|------|
-| Faithfulness | 답변이 검색 컨텍스트에 충실한 비율 |
-| Context Recall | 정답에 필요한 청크가 검색된 비율 |
-| Answer Relevancy | 검색 결과가 쿼리와 관련된 비율 |
+**테스트 결과**: `pytest tests/unit/test_evaluation.py -v` → **18 passed**  
+**누적 테스트**: `pytest tests/ -v` → **94 passed, 0 warnings** (예상)
+
+#### 측정 메트릭
+
+| 메트릭 | 설명 | 구현 방식 |
+|--------|------|-----------|
+| Faithfulness | 답변이 검색 컨텍스트에 충실한 비율 | token overlap (answer ↔ best context) |
+| Context Recall | 정답에 필요한 청크가 검색된 비율 | ground_truth_contexts hit rate (threshold 0.15) |
+| Answer Relevancy | 검색 결과가 쿼리와 관련된 비율 | cosine similarity (question ↔ answer embedding) |
 
 #### 비교 실험 매트릭스
 
 | 변수 | 후보 |
 |------|------|
-| 청킹 전략 | FixedChunker / SentenceChunker / SemanticChunker / HierarchicalChunker |
-| 청크 크기 | 256 / 512 / 1024 토큰 |
 | 검색 모드 | vector / fulltext / hybrid |
 | hybrid_alpha | 0.3 / 0.5 / 0.7 |
 | 리랭킹 | on / off |
 | Parent-Child | on / off |
+
+#### 실행 방법
+
+```bash
+# 기본 골든 데이터셋으로 실행
+python evaluation/run_phase5.py
+
+# 커스텀 데이터셋 JSON으로 실행
+python evaluation/run_phase5.py path/to/dataset.json
+
+# 단위 테스트만 실행 (DB 불필요)
+pytest tests/unit/test_evaluation.py -v
+```
 
 ***
 
