@@ -1,11 +1,7 @@
-38개 전체 통과 확인했습니다. 진행 상황을 반영하여 계획서를 업데이트합니다.
-
-***
-
 # RAG 서비스 구현 계획서
 
 작성일: 2026-05-12
-버전: v1.1.0 (Phase 1~3 완료)
+버전: v1.2.0 (Phase 1~4 완료)
 
 ***
 
@@ -32,6 +28,8 @@
 | 풀텍스트 검색 | PostgreSQL tsvector | 한국어: pg_bigm |
 | 임베딩 모델 | OpenAI text-embedding-3-large | IEmbedder로 추상화, 교체 가능 |
 | LLM 추론 (리랭킹) | vLLM (로컬) | OpenAI 호환 API /v1/chat/completions |
+| 청킹 | SemanticChunker (기본) | 코사인 유사도 기반 경계 탐지, 교체 가능 |
+| 폴더 감시 | watchdog | 파일 이벤트 → 자동 재임베딩 |
 | 마이그레이션 | Alembic | |
 | 설정 관리 | Pydantic Settings | |
 | 테스트 | pytest + httpx | |
@@ -63,7 +61,7 @@ rag_service/
 │       └── 0001_init_rag.py
 │
 └── app/
-    ├── main.py
+    ├── main.py                         # lifespan: FolderWatcher 통합
     ├── config.py
     ├── database.py
     │
@@ -75,16 +73,17 @@ rag_service/
     ├── application/
     │   ├── __init__.py
     │   ├── ingest_usecase.py
-    │   ├── search_usecase.py
+    │   ├── search_usecase.py           # Parent-Child 컨텍스트 확장
     │   └── manage_usecase.py
     │
     ├── infrastructure/
     │   ├── __init__.py
     │   ├── orm_models.py
-    │   ├── pg_vector_store.py
+    │   ├── pg_vector_store.py          # hybrid_alpha RRF, get_parent_chunks
     │   ├── openai_embedder.py
     │   ├── vllm_reranker.py
-    │   └── chunker.py
+    │   ├── chunker.py                  # SemanticChunker 추가
+    │   └── folder_watcher.py           # watchdog 기반 FolderWatcher (신규)
     │
     └── api/
         ├── __init__.py
@@ -217,7 +216,9 @@ Body: {
     "tags": list[str] | null,
     "top_k": int (default: 10),
     "search_mode": "hybrid" | "vector" | "fulltext",
-    "rerank": bool (default: true)
+    "rerank": bool (default: true),
+    "hybrid_alpha": float (0.0~1.0, default: 0.5),  -- Phase 4 추가
+    "use_parent_context": bool (default: false)      -- Phase 4 추가
 }
 Response: {
     "results": [
@@ -231,7 +232,8 @@ Response: {
             "valid_from": datetime,
             "valid_to": datetime | null,
             "source_path": str,
-            "recorded_at": datetime
+            "recorded_at": datetime,
+            "parent_content": str | null  -- Phase 4 추가 (use_parent_context=true 시 채워짐)
         }
     ],
     "total": int
@@ -245,6 +247,14 @@ Response: {
 | vector | pgvector 코사인 유사도 | 의미 기반 검색, 키워드 정확도 낮음 |
 | fulltext | PostgreSQL tsvector | 키워드 정확도 높음, 의미 유사도 약함 |
 | hybrid | RRF(Reciprocal Rank Fusion) | vector + fulltext 상호 보완, 기본 권장 |
+
+#### hybrid_alpha 튜닝 가이드
+
+| alpha 값 | 특성 |
+|---------|------|
+| 1.0 | vector 검색 100% (의미 유사도 극대화) |
+| 0.5 | vector / fulltext 균등 (기본값, 범용 권장) |
+| 0.0 | fulltext 검색 100% (키워드 정확도 극대화) |
 
 ### Manage
 
@@ -309,8 +319,10 @@ class SearchRequest(BaseModel):
     trust_tier_min: int | None = None
     tags: list[str] | None = None
     top_k: int = 10
-    search_mode: Literal["hybrid", "vector", "fulltext"] = "hybrid"  # Literal 강제
+    search_mode: Literal["hybrid", "vector", "fulltext"] = "hybrid"
     rerank: bool = True
+    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)  # Phase 4
+    use_parent_context: bool = False                            # Phase 4
 
 class SearchResult(BaseModel):
     doc_id: str
@@ -323,8 +335,9 @@ class SearchResult(BaseModel):
     valid_to: datetime | None
     source_path: str
     recorded_at: datetime
+    parent_content: str | None = None  # Phase 4
 
-class UpdateRequest(BaseModel):     # 기존 문서 수정 (doc_id 필수)
+class UpdateRequest(BaseModel):
     doc_id: str
     content: str
     trust_tier: int | None = None
@@ -333,7 +346,7 @@ class UpdateRequest(BaseModel):     # 기존 문서 수정 (doc_id 필수)
     valid_from: datetime | None = None
     valid_to: datetime | None = None
 
-class WriteRequest(BaseModel):      # 신규 문서 생성 (doc_id 옵션)
+class WriteRequest(BaseModel):
     content: str
     source_path: str
     trust_tier: int = Field(default=3, ge=1, le=5)
@@ -372,6 +385,7 @@ class IVectorStore(ABC):
     ) -> list[SearchResult]: ...
     async def get_by_doc_id(self, doc_id: str) -> list[RAGChunk]: ...
     async def get_source_paths(self) -> list[str]: ...
+    async def get_parent_chunks(self, parent_doc_ids: list[str]) -> dict[str, str]: ...  # Phase 4
 ```
 
 ***
@@ -448,6 +462,9 @@ volumes:
 | HF_TOKEN | HuggingFace 토큰 | 비공개 모델 시 필수 |
 | APP_ENV | 환경 구분 | development |
 | RERANKER_ENABLED | vLLM 리랭킹 활성화 | true |
+| HYBRID_ALPHA | RRF vector/fulltext 가중치 (0.0~1.0) | 0.5 |
+| WATCH_FOLDER | 자동 임베딩 감시 폴더 경로 | "" (비활성) |
+| SEMANTIC_CHUNKER_THRESHOLD | SemanticChunker 경계 임계값 | 0.85 |
 
 ### GPU 없는 개발 모드
 
@@ -545,16 +562,36 @@ docker compose --profile gpu up --build
 
 ***
 
-### 🔲 Phase 4 — 고도화
+### ✅ Phase 4 — 고도화 `[완료]`
 
-**기간**: 2~3일 | **완료 기준**: 검색 품질 및 운영 안정성 향상 확인
+**기간**: 1일 | **완료일**: 2026-05-15
 
-| 작업 | 상세 |
-|------|------|
-| Semantic Chunking | 문장 임베딩 코사인 유사도 기반 경계 탐지 |
-| 하이브리드 RRF 튜닝 | vector/fulltext 가중치 및 k 파라미터 최적화 |
-| 폴더 변경 감지 | watchdog 기반 파일 이벤트 → 자동 재임베딩 |
-| Parent-Child 검색 | 자식 청크 검색 → 부모 청크 컨텍스트로 LLM 전달 |
+| 작업 | 파일 | 상태 |
+|------|------|------|
+| SemanticChunker 구현 | app/infrastructure/chunker.py | ✅ |
+| hybrid_alpha RRF 튜닝 | app/infrastructure/pg_vector_store.py | ✅ |
+| FolderWatcher 구현 | app/infrastructure/folder_watcher.py | ✅ |
+| lifespan FolderWatcher 통합 | app/main.py | ✅ |
+| Parent-Child 검색 | app/application/search_usecase.py | ✅ |
+| IVectorStore.get_parent_chunks 추가 | app/domain/ports.py | ✅ |
+| SearchRequest/Result 필드 확장 | app/domain/models.py | ✅ |
+| SearchAPIRequest/Item 필드 확장 | app/api/schemas/search_schema.py | ✅ |
+| 환경변수 3종 추가 | app/config.py | ✅ |
+
+**비고**:
+- `SemanticChunker`: 인접 문장 임베딩 코사인 유사도가 `SEMANTIC_CHUNKER_THRESHOLD`(기본 0.85) 미만으로 하락하는 지점을 청크 경계로 결정. `deps.py`에서 기본 청커로 교체.
+- `hybrid_alpha`: 요청마다 동적 조정 가능. `1.0` → vector 전용, `0.0` → fulltext 전용.
+- `FolderWatcher`: `WATCH_FOLDER` 설정 시 서버 기동과 함께 watchdog Observer 시작. 생성/수정 이벤트 → `ingest_file()`, 삭제 이벤트 → soft-delete.
+- `Parent-Child` 검색: `use_parent_context=true` 요청 시 검색된 자식 청크의 `doc_id`로 부모 전체 텍스트를 조합하여 `SearchResult.parent_content`에 주입.
+
+#### Chunker 구현 목록 (업데이트)
+
+| 클래스 | 설명 |
+|--------|------|
+| FixedChunker | 고정 토큰 크기, overlap 지원 |
+| SentenceChunker | 문장 단위 분리, overlap_sentences 지원 |
+| HierarchicalChunker | Parent-Child 구조, 검색 정밀도 + 컨텍스트 폭 동시 확보 |
+| **SemanticChunker** | **임베딩 코사인 유사도 기반 경계 탐지, Phase 4 기본값** |
 
 ***
 
@@ -574,10 +611,12 @@ docker compose --profile gpu up --build
 
 | 변수 | 후보 |
 |------|------|
-| 청킹 전략 | FixedChunker / SentenceChunker / HierarchicalChunker |
+| 청킹 전략 | FixedChunker / SentenceChunker / SemanticChunker / HierarchicalChunker |
 | 청크 크기 | 256 / 512 / 1024 토큰 |
 | 검색 모드 | vector / fulltext / hybrid |
+| hybrid_alpha | 0.3 / 0.5 / 0.7 |
 | 리랭킹 | on / off |
+| Parent-Child | on / off |
 
 ***
 
