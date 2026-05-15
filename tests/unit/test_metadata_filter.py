@@ -70,3 +70,11 @@ class TestSearchRequestDefaults:
     def test_rerank_default_true(self) -> None:
         req = SearchRequest(query="테스트 쿼리")
         assert req.rerank is True
+
+    def test_hybrid_alpha_default(self) -> None:
+        req = SearchRequest(query="테스트 쿼리")
+        assert req.hybrid_alpha == pytest.approx(0.5)
+
+    def test_use_parent_context_default_false(self) -> None:
+        req = SearchRequest(query="테스트 쿼리")
+        assert req.use_parent_context is False
