@@ -22,6 +22,9 @@ def _build_reranker() -> IReranker:
     if settings.llm_backend == "mlx":
         from app.infrastructure.mlx_reranker import MLXReranker
         return MLXReranker()
+    if settings.llm_backend == "ollama":
+        from app.infrastructure.ollama_reranker import OllamaReranker
+        return OllamaReranker()
     return VLLMReranker()
 
 

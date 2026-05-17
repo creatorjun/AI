@@ -38,6 +38,35 @@ services:
       retries: 20
       start_period: 60s
 
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: ["ollama_models:/root/.ollama"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      retries: 20
+      start_period: 30s
+
+  ollama-init:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    volumes: ["ollama_models:/root/.ollama"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_MODEL:-gemma4:e4b-it-q4_K_M}"]
+
   api:
     build: .
     ports: ["8000:8000"]
@@ -50,3 +79,4 @@ services:
 volumes:
   pgdata:
   vllm_models:
+  ollama_models:
