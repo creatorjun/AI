@@ -65,7 +65,12 @@ services:
         condition: service_healthy
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_MODEL:-gemma4:e4b-it-q4_K_M}"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        ollama pull ${OLLAMA_MODEL:-gemma4:e4b-it-q4_K_M}
+        ollama pull ${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
 
   api:
     build: .

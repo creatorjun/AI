@@ -9,11 +9,18 @@ from app.application.manage_usecase import ManageUsecase
 from app.application.search_usecase import SearchUsecase
 from app.config import settings
 from app.database import get_db
-from app.domain.ports import IReranker
+from app.domain.ports import IEmbedder, IReranker
 from app.infrastructure.chunker import SemanticChunker
 from app.infrastructure.openai_embedder import OpenAIEmbedder
 from app.infrastructure.pg_vector_store import PgVectorStore
 from app.infrastructure.vllm_reranker import NoOpReranker, VLLMReranker
+
+
+def _build_embedder() -> IEmbedder:
+    if settings.embedding_backend == "ollama":
+        from app.infrastructure.ollama_embedder import OllamaEmbedder
+        return OllamaEmbedder()
+    return OpenAIEmbedder()
 
 
 def _build_reranker() -> IReranker:
@@ -28,7 +35,7 @@ def _build_reranker() -> IReranker:
     return VLLMReranker()
 
 
-_embedder = OpenAIEmbedder()
+_embedder: IEmbedder = _build_embedder()
 _reranker: IReranker = _build_reranker()
 _chunker = SemanticChunker(embedder=_embedder, threshold=settings.semantic_chunker_threshold)
 

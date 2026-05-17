@@ -8,9 +8,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     database_url: str
-    openai_api_key: str
+    openai_api_key: str = ""
     embedding_model: str = "text-embedding-3-large"
-    embedding_dimensions: int = 3072
+    embedding_dimensions: int = 1024
+    embedding_backend: Literal["openai", "ollama"] = "ollama"
 
     llm_backend: Literal["vllm", "mlx", "ollama"] = "vllm"
 
@@ -21,9 +22,10 @@ class Settings(BaseSettings):
     mlx_model: str = "mlx-community/Qwen2.5-7B-Instruct-4bit"
     mlx_max_tokens: int = 32
 
-    ollama_base_url: str = "http://ollama:11434/v1"
+    ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "gemma4:e4b-it-q4_K_M"
     ollama_api_key: str = "ollama"
+    ollama_embedding_model: str = "mxbai-embed-large"
 
     hf_token: str = ""
     app_env: str = "development"
