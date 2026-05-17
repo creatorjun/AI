@@ -10,13 +10,23 @@ from app.application.search_usecase import SearchUsecase
 from app.config import settings
 from app.database import get_db
 from app.domain.ports import IReranker
-from app.infrastructure.chunker import SemanticChunker, SentenceChunker
+from app.infrastructure.chunker import SemanticChunker
 from app.infrastructure.openai_embedder import OpenAIEmbedder
 from app.infrastructure.pg_vector_store import PgVectorStore
 from app.infrastructure.vllm_reranker import NoOpReranker, VLLMReranker
 
+
+def _build_reranker() -> IReranker:
+    if not settings.reranker_enabled:
+        return NoOpReranker()
+    if settings.llm_backend == "mlx":
+        from app.infrastructure.mlx_reranker import MLXReranker
+        return MLXReranker()
+    return VLLMReranker()
+
+
 _embedder = OpenAIEmbedder()
-_reranker: IReranker = VLLMReranker() if settings.reranker_enabled else NoOpReranker()
+_reranker: IReranker = _build_reranker()
 _chunker = SemanticChunker(embedder=_embedder, threshold=settings.semantic_chunker_threshold)
 
 
