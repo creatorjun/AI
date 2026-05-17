@@ -1,7 +1,8 @@
 # app/domain/ports.py
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
-from app.domain.models import RAGChunk, SearchRequest, SearchResult, UpdateRequest
+from app.domain.models import GenerateRequest, GenerateResponse, RAGChunk, SearchRequest, SearchResult, UpdateRequest
 
 
 class IEmbedder(ABC):
@@ -22,6 +23,14 @@ class IReranker(ABC):
     async def rerank(
         self, query: str, results: list[SearchResult], top_k: int
     ) -> list[SearchResult]: ...
+
+
+class IGenerator(ABC):
+    @abstractmethod
+    async def generate(self, request: GenerateRequest) -> GenerateResponse: ...
+
+    @abstractmethod
+    async def generate_stream(self, request: GenerateRequest) -> AsyncIterator[str]: ...
 
 
 class IVectorStore(ABC):

@@ -4,12 +4,13 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.generate_usecase import GenerateUsecase
 from app.application.ingest_usecase import IngestUsecase
 from app.application.manage_usecase import ManageUsecase
 from app.application.search_usecase import SearchUsecase
 from app.config import settings
 from app.database import get_db
-from app.domain.ports import IEmbedder, IReranker
+from app.domain.ports import IEmbedder, IGenerator, IReranker
 from app.infrastructure.chunker import SemanticChunker
 from app.infrastructure.openai_embedder import OpenAIEmbedder
 from app.infrastructure.pg_vector_store import PgVectorStore
@@ -35,8 +36,20 @@ def _build_reranker() -> IReranker:
     return VLLMReranker()
 
 
+def _build_generator() -> IGenerator:
+    if settings.llm_backend == "mlx":
+        from app.infrastructure.mlx_generator import MLXGenerator
+        return MLXGenerator()
+    if settings.llm_backend == "ollama":
+        from app.infrastructure.ollama_generator import OllamaGenerator
+        return OllamaGenerator()
+    from app.infrastructure.vllm_generator import VLLMGenerator
+    return VLLMGenerator()
+
+
 _embedder: IEmbedder = _build_embedder()
 _reranker: IReranker = _build_reranker()
+_generator: IGenerator = _build_generator()
 _chunker = SemanticChunker(embedder=_embedder, threshold=settings.semantic_chunker_threshold)
 
 
@@ -69,6 +82,18 @@ async def get_search_usecase(
     )
 
 
+async def get_generate_usecase(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> GenerateUsecase:
+    return GenerateUsecase(
+        embedder=_embedder,
+        vector_store=PgVectorStore(session),
+        reranker=_reranker,
+        generator=_generator,
+    )
+
+
 IngestDep = Annotated[IngestUsecase, Depends(get_ingest_usecase)]
 ManageDep = Annotated[ManageUsecase, Depends(get_manage_usecase)]
 SearchDep = Annotated[SearchUsecase, Depends(get_search_usecase)]
+GenerateDep = Annotated[GenerateUsecase, Depends(get_generate_usecase)]

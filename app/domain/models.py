@@ -72,3 +72,17 @@ class WriteRequest(BaseModel):
     valid_to: datetime | None = None
     doc_id: str | None = None
     parent_doc_id: str | None = None
+
+
+class GenerateRequest(BaseModel):
+    query: str
+    contexts: list[SearchResult]
+    system_prompt: str | None = None
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=1024, ge=64, le=8192)
+
+
+class GenerateResponse(BaseModel):
+    answer: str
+    sources: list[str]
+    model: str

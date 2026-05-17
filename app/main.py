@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routers import ingest, manage, search
+from app.api.routers import ingest, manage, search, generate
 from app.api.deps import _embedder, _chunker
 from app.application.ingest_usecase import IngestUsecase
 from app.config import settings
@@ -46,11 +46,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _folder_watcher.stop()
 
 
-app = FastAPI(title="RAG Service", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="RAG Service", version="1.2.0", lifespan=lifespan)
 
 app.include_router(ingest.router)
 app.include_router(search.router)
 app.include_router(manage.router)
+app.include_router(generate.router)
 
 
 @app.get("/health")
@@ -60,5 +61,7 @@ async def health(session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
         "status": "ok",
         "env": settings.app_env,
         "db": "connected",
+        "embedding_backend": settings.embedding_backend,
+        "llm_backend": settings.llm_backend,
         "watch_folder": settings.watch_folder or None,
     }
