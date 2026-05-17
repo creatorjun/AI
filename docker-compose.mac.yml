@@ -1,0 +1,41 @@
+# rag_service/docker-compose.mac.yml
+# Apple Silicon (M1/M2/M3/M4) 로컬 개발 전용
+# 사전 조건:
+#   1. Mac 로컬에 Ollama 설치 및 실행: brew install ollama && ollama serve
+#   2. 모델 Pull: ollama pull gemma4:e4b-it-q4_K_M && ollama pull mxbai-embed-large
+#   3. 기동: docker compose -f docker-compose.yml -f docker-compose.mac.yml up
+#
+# MLX 백엔드 사용 시: LLM_BACKEND=mlx 로 설정 (Ollama 불필요)
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ragdb
+      POSTGRES_USER: raguser
+      POSTGRES_PASSWORD: ragpass
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raguser -d ragdb"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.mac
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env.mac
+    volumes:
+      - ./:/app
+      - huggingface_cache:/root/.cache/huggingface
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:
+  huggingface_cache:

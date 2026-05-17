@@ -13,6 +13,7 @@ services:
       interval: 5s
       retries: 10
 
+  # ── GPU 서버 전용 (NVIDIA CC 8.0+, VRAM 8GB+) ─────────────────────────────
   vllm:
     profiles: ["gpu"]
     image: vllm/vllm-openai:latest
@@ -21,7 +22,7 @@ services:
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     command: >
-      --model ${VLLM_MODEL}
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
       --dtype auto
       --max-model-len 8192
       --gpu-memory-utilization 0.85
@@ -38,6 +39,26 @@ services:
       retries: 20
       start_period: 60s
 
+  # ── CPU 전용 vLLM (GPU 없는 로컬 / CI 환경) ───────────────────────────────
+  vllm-cpu:
+    profiles: ["vllm-cpu"]
+    image: vllm/vllm-openai:v0.4.3-cpu
+    ports: ["8001:8000"]
+    volumes: ["vllm_models:/root/.cache/huggingface"]
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      --dtype float32
+      --device cpu
+      --max-model-len 4096
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      retries: 20
+      start_period: 120s
+
+  # ── Ollama GPU (NVIDIA GTX/RTX, VRAM 4GB+) ───────────────────────────────
   ollama:
     profiles: ["ollama"]
     image: ollama/ollama:latest
@@ -72,6 +93,35 @@ services:
         ollama pull ${OLLAMA_MODEL:-gemma4:e4b-it-q4_K_M}
         ollama pull ${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
 
+  # ── Ollama CPU-only (GPU 없는 로컬 환경) ─────────────────────────────────
+  ollama-cpu:
+    profiles: ["ollama-cpu"]
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: ["ollama_models:/root/.ollama"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      retries: 20
+      start_period: 30s
+
+  ollama-cpu-init:
+    profiles: ["ollama-cpu"]
+    image: ollama/ollama:latest
+    volumes: ["ollama_models:/root/.ollama"]
+    depends_on:
+      ollama-cpu:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama-cpu:11434
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        ollama pull ${OLLAMA_MODEL:-gemma4:e4b-it-q4_K_M}
+        ollama pull ${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
+
+  # ── RAG API 서비스 ────────────────────────────────────────────────────────
   api:
     build: .
     ports: ["8000:8000"]
@@ -79,6 +129,8 @@ services:
       db:
         condition: service_healthy
     env_file: .env
+    volumes:
+      - ./:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
