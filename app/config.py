@@ -1,4 +1,6 @@
 # app/config.py
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +14,9 @@ class Settings(BaseSettings):
     vllm_base_url: str = "http://vllm:8000/v1"
     vllm_model: str = "Qwen/Qwen2.5-7B-Instruct"
     vllm_api_key: str = "EMPTY"
+    mlx_model: str = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+    mlx_max_tokens: int = 32
+    llm_backend: Literal["vllm", "mlx"] = "vllm"
     hf_token: str = ""
     app_env: str = "development"
     reranker_enabled: bool = True
