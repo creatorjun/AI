@@ -1,7 +1,7 @@
 # AI 서비스 아키텍처 설계서
 
 작성일: 2026-05-15  
-버전: v1.0
+버전: v1.1
 
 ***
 
@@ -43,7 +43,7 @@ FastAPI 기반 AI 서비스로 구현한다.
 | `IEmbedder` | `OpenAIEmbedder` | CohereEmbedder, LocalEmbedder |
 | `IVectorStore` | `PgVectorStore` | QdrantStore, WeaviateStore |
 | `IChunker` | `SemanticChunker` | FixedChunker, HierarchicalChunker |
-| `IReranker` | `VLLMReranker` | CohereReranker, NoOpReranker |
+| `IReranker` | `VLLMReranker` / `MLXReranker` | CohereReranker, NoOpReranker |
 | `IWebSearcher` | `TavilySearcher` | BraveSearcher, SerperSearcher |
 
 ### 독립 배포 가능
@@ -62,7 +62,7 @@ FastAPI 서버 없이도 유스케이스를 라이브러리로 직접 import하�
 | 벡터 저장/검색 | pgvector | PostgreSQL 익스텐션 |
 | 풀텍스트 검색 | PostgreSQL tsvector | 한국어: pg_bigm |
 | 임베딩 모델 | OpenAI text-embedding-3-large | IEmbedder로 추상화, 교체 가능 |
-| LLM 추론 (리랭킹) | vLLM (로컬) | OpenAI 호환 API |
+| LLM 추론 (리랭킹) | vLLM (서버) / MLX (Apple Silicon) | `LLM_BACKEND` 환경변수로 전환 |
 | 청킹 | SemanticChunker (기본) | 코사인 유사도 기반 경계 탐지, 교체 가능 |
 | 폴더 감시 | watchdog | 파일 이벤트 → 자동 재임베딩 |
 | 인터넷 검색 | Tavily API (기본) | IWebSearcher로 추상화, 교체 가능 |
@@ -71,13 +71,28 @@ FastAPI 서버 없이도 유스케이스를 라이브러리로 직접 import하�
 | 테스트 | pytest + httpx | |
 | 컨테이너 | Docker Compose | PG + vLLM + API 동시 기동 |
 
-### vLLM 모델 선택 기준 (GPU VRAM)
+### LLM 백엔드 선택 기준
+
+| 백엔드 | 환경 | 특징 |
+|--------|------|------|
+| **vLLM** | Linux / GPU 서버 | OpenAI 호환 API, 고처리량, 프로덕션 권장 |
+| **MLX** | Apple Silicon (M1/M2/M3/M4) | Metal GPU 가속, 로컬 개발 최적화, 양자화 모델 지원 |
+
+#### vLLM 모델 선택 기준 (GPU VRAM)
 
 | VRAM | 권장 모델 |
 |------|---------|
 | 8GB | Qwen/Qwen2.5-7B-Instruct |
 | 16GB | Qwen/Qwen2.5-14B-Instruct |
 | 24GB | Qwen/Qwen2.5-32B-Instruct (AWQ 양자화) |
+
+#### MLX 모델 선택 기준 (Apple Silicon Unified Memory)
+
+| 메모리 | 권장 모델 |
+|--------|----------|
+| 16GB | mlx-community/Qwen2.5-7B-Instruct-4bit |
+| 32GB | mlx-community/Qwen2.5-14B-Instruct-4bit |
+| 64GB | mlx-community/Qwen2.5-32B-Instruct-4bit |
 
 ***
 
@@ -124,6 +139,7 @@ FastAPI 서버 없이도 유스케이스를 라이브러리로 직접 import하�
 │   │   ├── pg_vector_store.py              # hybrid_alpha RRF, get_parent_chunks
 │   │   ├── openai_embedder.py
 │   │   ├── vllm_reranker.py                # VLLMReranker / NoOpReranker
+│   │   ├── mlx_reranker.py                 # MLXReranker (Apple Silicon)
 │   │   ├── chunker.py                      # Fixed / Sentence / Hierarchical / Semantic
 │   │   ├── folder_watcher.py               # watchdog 기반 FolderWatcher
 │   │   ├── tavily_searcher.py              # TavilySearcher (기본)          [Phase 6]
@@ -327,7 +343,67 @@ GET    /documents/{doc_id}
 
 ***
 
-## 8. 인터넷 서치 툴 아키텍처
+## 8. LLM 백엔드 — vLLM / MLX 전환
+
+리랭커(`IReranker`)의 LLM 추론 백엔드를 환경변수 하나로 전환할 수 있다.
+`domain/ports.py` 의 `IReranker` 인터페이스는 변경 없이 유지되며,
+`SearchUsecase` 는 어떤 백엔드가 주입되는지 알지 못한다.
+
+### 어댑터 비교
+
+| 항목 | VLLMReranker | MLXReranker |
+|------|-------------|-------------|
+| 구현 파일 | `infrastructure/vllm_reranker.py` | `infrastructure/mlx_reranker.py` |
+| 실행 환경 | Linux / GPU 서버 | Apple Silicon (M1~M4) |
+| 추론 방식 | OpenAI 호환 HTTP API (`AsyncOpenAI`) | `mlx-lm` 로컬 동기 추론 + `run_in_executor` 래핑 |
+| 필수 패키지 | `openai` | `mlx-lm` |
+| 비동기 처리 | 네이티브 `async/await` | `asyncio.run_in_executor` (스레드풀 오프로드) |
+| 프로덕션 적합성 | ✅ 권장 | 로컬 개발 / 테스트 |
+
+### 전환 방법
+
+`.env` 또는 환경변수에서 `LLM_BACKEND` 값만 변경하면 된다. 코드 수정은 불필요하다.
+
+```bash
+# vLLM 백엔드 (기본값 — 서버/프로덕션 환경)
+LLM_BACKEND=vllm
+VLLM_BASE_URL=http://vllm:8000/v1
+VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+VLLM_API_KEY=EMPTY
+
+# MLX 백엔드 (Apple Silicon 로컬 개발)
+LLM_BACKEND=mlx
+MLX_MODEL=mlx-community/Qwen2.5-7B-Instruct-4bit
+MLX_MAX_TOKENS=32
+```
+
+### MLX 패키지 설치
+
+```bash
+pip install mlx-lm
+```
+
+`mlx-lm` 은 Apple Silicon 전용 패키지이므로 Linux/Windows 환경에서는 설치하지 않는다.
+`LLM_BACKEND=vllm` (기본값) 상태에서는 `mlx-lm` 이 없어도 서비스가 정상 기동된다.
+임포트를 `_build_reranker()` 팩토리 내부에서 지연 실행하므로 환경 간 충돌이 없다.
+
+### DI 조립 흐름 (`api/deps.py`)
+
+```python
+def _build_reranker() -> IReranker:
+    if not settings.reranker_enabled:
+        return NoOpReranker()
+    if settings.llm_backend == "mlx":
+        from app.infrastructure.mlx_reranker import MLXReranker
+        return MLXReranker()
+    return VLLMReranker()
+```
+
+`SearchUsecase` 에 주입되는 `IReranker` 구현체는 이 팩토리 함수 한 곳에서만 결정된다.
+
+***
+
+## 9. 인터넷 서치 툴 아키텍처
 
 ### 의존성 흐름
 
@@ -356,7 +432,7 @@ GET    /documents/{doc_id}
 | RAG 연동 최적화 | ✅ 최적화됨 | 일반 | 일반 |
 | **기본값** | **✅ 기본** | 대안 | 대안 |
 
-`SEARCHER_PROVIDER` 환경변수 하나로 어댑터를 교체한다. 기존 `VLLMReranker` / `NoOpReranker`
+`SEARCHER_PROVIDER` 환경변수 하나로 어댑터를 교체한다. 기존 `VLLMReranker` / `MLXReranker`
 분기 방식과 완전히 동일한 패턴이다.
 
 ### auto_ingest 동작 시퀀스
@@ -377,7 +453,7 @@ WebSearchUsecase.search(auto_ingest=True)
 
 ***
 
-## 9. DB 스키마
+## 10. DB 스키마
 
 ### 핵심 테이블: rag_documents
 
@@ -434,7 +510,7 @@ CREATE INDEX ON rag_documents (trust_tier, valid_from, valid_to);
 
 ***
 
-## 10. 환경변수
+## 11. 환경변수
 
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
@@ -442,12 +518,15 @@ CREATE INDEX ON rag_documents (trust_tier, valid_from, valid_to);
 | OPENAI_API_KEY | OpenAI 임베딩 API 키 | 필수 |
 | EMBEDDING_MODEL | 임베딩 모델명 | text-embedding-3-large |
 | EMBEDDING_DIMENSIONS | 벡터 차원 수 | 3072 |
+| LLM_BACKEND | LLM 추론 백엔드 선택 (`vllm` \| `mlx`) | vllm |
 | VLLM_BASE_URL | vLLM API 엔드포인트 | http://vllm:8000/v1 |
 | VLLM_MODEL | vLLM 로드 모델명 | Qwen/Qwen2.5-7B-Instruct |
 | VLLM_API_KEY | vLLM API 키 | EMPTY |
+| MLX_MODEL | MLX 로드 모델명 (Apple Silicon 전용) | mlx-community/Qwen2.5-7B-Instruct-4bit |
+| MLX_MAX_TOKENS | MLX 추론 최대 토큰 수 | 32 |
 | HF_TOKEN | HuggingFace 토큰 | 비공개 모델 시 필수 |
 | APP_ENV | 환경 구분 | development |
-| RERANKER_ENABLED | vLLM 리랭킹 활성화 | true |
+| RERANKER_ENABLED | 리랭킹 활성화 | true |
 | HYBRID_ALPHA | RRF vector/fulltext 가중치 (0.0~1.0) | 0.5 |
 | WATCH_FOLDER | 자동 임베딩 감시 폴더 경로 | "" (비활성) |
 | SEMANTIC_CHUNKER_THRESHOLD | SemanticChunker 경계 임계값 | 0.85 |
@@ -465,11 +544,16 @@ docker compose up db api --build
 
 # GPU 포함 전체 기동
 docker compose --profile gpu up --build
+
+# Apple Silicon 로컬 개발 (MLX 백엔드)
+LLM_BACKEND=mlx \
+MLX_MODEL=mlx-community/Qwen2.5-7B-Instruct-4bit \
+uvicorn app.main:app --reload
 ```
 
 ***
 
-## 11. 에이전트 연동 설계
+## 12. 에이전트 연동 설계
 
 ### HTTP API 방식 (외부 마이크로서비스)
 
@@ -505,7 +589,7 @@ web_results = await web_search_usecase.search(web_request)
 
 ***
 
-## 12. 구현 현황
+## 13. 구현 현황
 
 | Phase | 내용 | 상태 |
 |-------|------|------|
@@ -514,4 +598,5 @@ web_results = await web_search_usecase.search(web_request)
 | Phase 3 | Application + API 레이어 (유스케이스 3종, 라우터, 스키마) | ✅ 완료 |
 | Phase 4 | 고도화 (SemanticChunker, RRF 튜닝, FolderWatcher, Parent-Child) | ✅ 완료 |
 | Phase 5 | 품질 검증 (RAGAS 평가 파이프라인, 실험 매트릭스) | ✅ 완료 |
+| Phase 5.1 | MLX 백엔드 지원 (MLXReranker, LLM_BACKEND 전환) | ✅ 완료 |
 | Phase 6 | 인터넷 서치 툴 (IWebSearcher, 어댑터 3종, WebSearchUsecase) | 🔲 예정 |
