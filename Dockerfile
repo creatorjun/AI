@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir \
     "pydantic-settings>=2.2.0" \
     "openai>=1.30.0" \
     "httpx>=0.27.0" \
+    "watchdog>=4.0.0" \
     "pytest>=8.0.0" \
     "pytest-asyncio>=0.23.0"
 
